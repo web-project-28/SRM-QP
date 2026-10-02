@@ -1,205 +1,515 @@
-const API_BASE = "https://srm-qp-backend.vercel.app";
+const API_BASE =
+  "https://srm-qp-backend.vercel.app";
 
 const app = document.querySelector("#app");
 
 app.innerHTML = `
   <div class="app-shell">
+
     <header class="topbar">
       <div class="brand">
         <div class="brand-icon">SRM</div>
+
         <div>
           <h1>SRM AP Question Papers</h1>
-          <p>Find previous question papers quickly</p>
+          <p>
+            Find previous question papers
+          </p>
         </div>
       </div>
     </header>
 
     <main class="chat-container">
+
       <section class="welcome">
-        <h2>What question paper are you looking for?</h2>
+        <h2>
+          Find Question Papers
+        </h2>
+
         <p>
-          Search by subject, course code, exam type, month, or year.
+          Browse all available SRM AP question papers
+          by exam type, year and semester.
         </p>
       </section>
 
-      <div class="quick-searches">
-        <button data-query="previous year question papers">
-          Previous Year
-        </button>
+      <section class="filters">
 
-        <button data-query="mid term question papers">
-          Mid Term
-        </button>
+        <div class="filter-group">
+          <label>Exam</label>
 
-        <button data-query="end term question papers">
-          End Term
-        </button>
+          <select id="exam-filter">
+            <option value="all">
+              All Exams
+            </option>
 
-        <button data-query="show me all available question papers">
-          All Papers
-        </button>
-      </div>
+            <option value="Mid Term">
+              Mid Term
+            </option>
 
-      <form id="search-form" class="search-box">
+            <option value="End Term">
+              End Term
+            </option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Year</label>
+
+          <select id="year-filter">
+            <option value="all">
+              All Years
+            </option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Semester</label>
+
+          <select id="semester-filter">
+            <option value="all">
+              All Semesters
+            </option>
+
+            <option value="Odd">
+              Odd Semester
+            </option>
+
+            <option value="Even">
+              Even Semester
+            </option>
+          </select>
+        </div>
+
+      </section>
+
+      <form
+        id="search-form"
+        class="search-box"
+      >
+
         <input
           id="search-input"
           type="text"
-          placeholder="Search question papers..."
+          placeholder="Search year, exam type, or keyword..."
           autocomplete="off"
         />
 
         <button type="submit">
           Search
         </button>
+
       </form>
+
+      <div class="quick-searches">
+
+        <button data-exam="all">
+          All Papers
+        </button>
+
+        <button data-exam="Mid Term">
+          Mid Term
+        </button>
+
+        <button data-exam="End Term">
+          End Term
+        </button>
+
+      </div>
 
       <div id="status"></div>
 
-      <section id="results" class="results"></section>
+      <section
+        id="results"
+        class="results"
+      ></section>
+
     </main>
   </div>
 `;
 
-const searchForm = document.querySelector("#search-form");
-const searchInput = document.querySelector("#search-input");
-const results = document.querySelector("#results");
-const status = document.querySelector("#status");
+const searchForm =
+  document.querySelector(
+    "#search-form"
+  );
 
-async function searchQuestionPapers(query) {
-  const cleanQuery = query.trim();
+const searchInput =
+  document.querySelector(
+    "#search-input"
+  );
 
-  if (!cleanQuery) {
-    status.textContent =
-      "Enter a question paper name or subject.";
+const examFilter =
+  document.querySelector(
+    "#exam-filter"
+  );
 
-    results.innerHTML = "";
-    return;
-  }
+const yearFilter =
+  document.querySelector(
+    "#year-filter"
+  );
+
+const semesterFilter =
+  document.querySelector(
+    "#semester-filter"
+  );
+
+const results =
+  document.querySelector(
+    "#results"
+  );
+
+const status =
+  document.querySelector(
+    "#status"
+  );
+
+
+async function loadPapers() {
 
   status.textContent =
-    "Searching SRM AP question papers...";
+    "Loading SRM question papers...";
 
   results.innerHTML = "";
 
-  try {
-    const url =
-      `${API_BASE}/api/search?q=${encodeURIComponent(cleanQuery)}`;
+  const params =
+    new URLSearchParams();
 
-    const response = await fetch(url);
+  const query =
+    searchInput.value.trim();
+
+  const examType =
+    examFilter.value;
+
+  const year =
+    yearFilter.value;
+
+  const semester =
+    semesterFilter.value;
+
+  if (query) {
+    params.set("q", query);
+  }
+
+  params.set(
+    "examType",
+    examType
+  );
+
+  params.set(
+    "year",
+    year
+  );
+
+  params.set(
+    "semester",
+    semester
+  );
+
+  try {
+
+    const response =
+      await fetch(
+        `${API_BASE}/api/search?${params.toString()}`
+      );
 
     if (!response.ok) {
       throw new Error(
-        `Server returned ${response.status}`
+        `HTTP ${response.status}`
       );
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
-    renderResults(data.results || []);
+    populateYears(
+      data.results || []
+    );
 
-    if ((data.results || []).length === 0) {
-      status.textContent =
-        "No matching question papers found.";
-    } else {
-      status.textContent =
-        `${data.results.length} question paper${
-          data.results.length === 1 ? "" : "s"
-        } found`;
-    }
-
-  } catch (error) {
-    console.error("Question paper search error:", error);
+    renderResults(
+      data.results || []
+    );
 
     status.textContent =
-      "Unable to connect to the question-paper server.";
+      `${data.count} question paper${
+        data.count === 1
+          ? ""
+          : "s"
+      } found`;
+
+  } catch (error) {
+
+    console.error(
+      "Search error:",
+      error
+    );
+
+    status.textContent =
+      "Unable to load question papers.";
 
     results.innerHTML = `
       <div class="error-card">
-        <h3>Search connection failed</h3>
+        <h3>
+          Unable to load papers
+        </h3>
+
         <p>
-          The website could not connect to the SRM question-paper server.
+          The question-paper server could
+          not return the papers.
         </p>
       </div>
     `;
   }
 }
 
-function renderResults(papers) {
-  results.innerHTML = "";
 
-  for (const paper of papers) {
-    const card = document.createElement("article");
+function populateYears(papers) {
 
-    card.className = "paper-card";
+  const currentValue =
+    yearFilter.value;
 
-    const title = document.createElement("h3");
+  const years =
+    [
+      ...new Set(
+        papers
+          .map(paper => paper.year)
+          .filter(Boolean)
+      )
+    ].sort(
+      (a, b) =>
+        Number(b) - Number(a)
+    );
 
-    title.textContent =
-      paper.title ||
-      paper.subject ||
-      "SRM AP Question Paper";
+  const existing =
+    new Set(
+      Array.from(
+        yearFilter.options
+      ).map(option =>
+        option.value
+      )
+    );
 
-    const details = document.createElement("div");
+  for (const year of years) {
 
-    details.className = "paper-details";
+    if (existing.has(year)) {
+      continue;
+    }
 
-    const information = [
-      paper.courseCode,
-      paper.examType,
-      paper.month,
-      paper.year
-    ].filter(Boolean);
+    const option =
+      document.createElement(
+        "option"
+      );
 
-    details.textContent =
-      information.length > 0
-        ? information.join(" • ")
-        : "Question Paper";
+    option.value = year;
+    option.textContent = year;
 
-    const actions = document.createElement("div");
+    yearFilter.appendChild(
+      option
+    );
+  }
 
-    actions.className = "paper-actions";
-
-    const viewButton = document.createElement("a");
-
-    viewButton.href = paper.pdfUrl;
-    viewButton.target = "_blank";
-    viewButton.rel = "noopener noreferrer";
-    viewButton.className = "view-button";
-    viewButton.textContent = "View PDF";
-
-    const downloadButton = document.createElement("a");
-
-    downloadButton.href = paper.pdfUrl;
-    downloadButton.target = "_blank";
-    downloadButton.rel = "noopener noreferrer";
-    downloadButton.className = "download-button";
-    downloadButton.textContent = "Download PDF";
-
-    downloadButton.setAttribute("download", "");
-
-    actions.appendChild(viewButton);
-    actions.appendChild(downloadButton);
-
-    card.appendChild(title);
-    card.appendChild(details);
-    card.appendChild(actions);
-
-    results.appendChild(card);
+  if (
+    currentValue &&
+    Array.from(
+      yearFilter.options
+    ).some(
+      option =>
+        option.value === currentValue
+    )
+  ) {
+    yearFilter.value =
+      currentValue;
   }
 }
 
-searchForm.addEventListener("submit", event => {
-  event.preventDefault();
 
-  searchQuestionPapers(searchInput.value);
-});
+function renderResults(papers) {
 
-document.querySelectorAll("[data-query]").forEach(button => {
-  button.addEventListener("click", () => {
-    const query = button.dataset.query;
+  results.innerHTML = "";
 
-    searchInput.value = query;
+  if (papers.length === 0) {
 
-    searchQuestionPapers(query);
+    results.innerHTML = `
+      <div class="empty-card">
+        <h3>
+          No question papers found
+        </h3>
+
+        <p>
+          Try All Exams and All Years.
+        </p>
+      </div>
+    `;
+
+    return;
+  }
+
+  for (const paper of papers) {
+
+    const card =
+      document.createElement(
+        "article"
+      );
+
+    card.className =
+      "paper-card";
+
+    const title =
+      document.createElement(
+        "h3"
+      );
+
+    title.textContent =
+      paper.title ||
+      "SRM AP Question Paper";
+
+    const details =
+      document.createElement(
+        "div"
+      );
+
+    details.className =
+      "paper-details";
+
+    const information = [
+      paper.examType,
+      paper.year,
+      paper.semester
+        ? `${paper.semester} Semester`
+        : ""
+    ].filter(Boolean);
+
+    details.textContent =
+      information.length
+        ? information.join(" • ")
+        : "Question Paper";
+
+    const actions =
+      document.createElement(
+        "div"
+      );
+
+    actions.className =
+      "paper-actions";
+
+    const viewButton =
+      document.createElement(
+        "a"
+      );
+
+    viewButton.href =
+      paper.pdfUrl;
+
+    viewButton.target =
+      "_blank";
+
+    viewButton.rel =
+      "noopener noreferrer";
+
+    viewButton.className =
+      "view-button";
+
+    viewButton.textContent =
+      "View PDF";
+
+    const downloadButton =
+      document.createElement(
+        "a"
+      );
+
+    downloadButton.href =
+      paper.pdfUrl;
+
+    downloadButton.target =
+      "_blank";
+
+    downloadButton.rel =
+      "noopener noreferrer";
+
+    downloadButton.className =
+      "download-button";
+
+    downloadButton.textContent =
+      "Download PDF";
+
+    downloadButton.setAttribute(
+      "download",
+      ""
+    );
+
+    actions.appendChild(
+      viewButton
+    );
+
+    actions.appendChild(
+      downloadButton
+    );
+
+    card.appendChild(
+      title
+    );
+
+    card.appendChild(
+      details
+    );
+
+    card.appendChild(
+      actions
+    );
+
+    results.appendChild(
+      card
+    );
+  }
+}
+
+
+searchForm.addEventListener(
+  "submit",
+  event => {
+
+    event.preventDefault();
+
+    loadPapers();
+  }
+);
+
+
+examFilter.addEventListener(
+  "change",
+  loadPapers
+);
+
+yearFilter.addEventListener(
+  "change",
+  loadPapers
+);
+
+semesterFilter.addEventListener(
+  "change",
+  loadPapers
+);
+
+
+document
+  .querySelectorAll(
+    "[data-exam]"
+  )
+  .forEach(button => {
+
+    button.addEventListener(
+      "click",
+      () => {
+
+        examFilter.value =
+          button.dataset.exam;
+
+        loadPapers();
+      }
+    );
   });
-});
+
+
+/*
+ * DEFAULT:
+ * Load ALL available papers.
+ */
+loadPapers();
