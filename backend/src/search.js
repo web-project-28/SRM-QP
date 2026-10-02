@@ -1,83 +1,146 @@
 import * as cheerio from "cheerio";
 
 const ROOT = "https://intranet.srmap.edu.in/";
+const MAX_PAGES = Number(process.env.MAX_PAGES || 150);
 
-const MAX_PAGES = Number(process.env.MAX_PAGES || 40);
+const QUESTION_PAPER_PATH_WORDS = [
+  "question",
+  "paper",
+  "question-paper",
+  "question_paper",
+  "exam"
+];
 
-function tokenize(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+const EXAM_TYPES = [
+  "mid term",
+  "midterm",
+  "mid-term",
+  "end term",
+  "endterm",
+  "end-term"
+];
+
+function cleanText(value = "") {
+  return String(value)
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function scorePaper(paper, query) {
-  const queryTokens = tokenize(query);
+function normalize(value = "") {
+  return cleanText(value).toLowerCase();
+}
 
-  const searchableText = tokenize(
-    [
-      paper.title,
-      paper.subject,
-      paper.courseCode,
-      paper.examType,
-      paper.folder,
-      paper.year,
-      paper.month,
-      paper.pdfUrl
-    ].join(" ")
-  );
+function absoluteUrl(href, base) {
+  try {
+    return new URL(href, base).href;
+  } catch {
+    return null;
+  }
+}
 
-  let score = 0;
+function sameHost(url) {
+  try {
+    return new URL(url).hostname === new URL(ROOT).hostname;
+  } catch {
+    return false;
+  }
+}
 
-  for (const token of queryTokens) {
-    if (searchableText.includes(token)) {
-      score += 3;
-    } else if (searchableText.some(value => value.includes(token))) {
-      score += 1;
-    }
+function isPdf(url) {
+  return /\.pdf(?:[?#].*)?$/i.test(url);
+}
+
+function detectExamType(text) {
+  const value = normalize(text);
+
+  if (
+    value.includes("mid term") ||
+    value.includes("midterm") ||
+    value.includes("mid-term")
+  ) {
+    return "Mid Term";
   }
 
-  return score;
-}
-
-function isQuestionPaper(url, text = "") {
-  return /\.pdf(\?|$)/i.test(url) &&
-    /(question|paper|exam|mid|term|end|test)/i.test(
-      `${url} ${text}`
-    );
-}
-
-function extractPaperInfo(title, url, folder = "") {
-  const combined = `${title} ${url}`;
-
-  const courseMatch = combined.match(
-    /\b([A-Z]{2,5}\s?[A-Z]?\s?\d{2,4})\b/i
-  );
-
-  let examType = "";
-
-  if (/mid\s*term/i.test(combined)) {
-    examType = "Mid Term";
-  } else if (/end\s*term/i.test(combined)) {
-    examType = "End Term";
+  if (
+    value.includes("end term") ||
+    value.includes("endterm") ||
+    value.includes("end-term")
+  ) {
+    return "End Term";
   }
 
-  const yearMatch = combined.match(/\b20\d{2}\b/);
+  return "";
+}
+
+function detectYear(text) {
+  const match = String(text).match(/\b20\d{2}\b/);
+  return match ? match[0] : "";
+}
+
+function detectSemester(text) {
+  const value = normalize(text);
+
+  if (
+    value.includes("odd semester") ||
+    value.includes("odd sem") ||
+    value.includes("1st semester") ||
+    value.includes("3rd semester") ||
+    value.includes("5th semester") ||
+    value.includes("7th semester")
+  ) {
+    return "Odd";
+  }
+
+  if (
+    value.includes("even semester") ||
+    value.includes("even sem") ||
+    value.includes("2nd semester") ||
+    value.includes("4th semester") ||
+    value.includes("6th semester") ||
+    value.includes("8th semester")
+  ) {
+    return "Even";
+  }
+
+  return "";
+}
+
+function looksLikeQuestionPaper(url, text) {
+  const combined = normalize(`${url} ${text}`);
+
+  if (!isPdf(url)) {
+    return false;
+  }
+
+  return (
+    QUESTION_PAPER_PATH_WORDS.some(word =>
+      combined.includes(word)
+    ) ||
+    EXAM_TYPES.some(type =>
+      combined.includes(type)
+    )
+  );
+}
+
+function makePaper(title, pdfUrl, context = "") {
+  const combined = `${title} ${pdfUrl} ${context}`;
 
   return {
-    title: title || "SRM AP Question Paper",
-    pdfUrl: url,
-    sourceUrl: url,
-    courseCode: courseMatch?.[1] || "",
-    subject: title
-      .replace(/\.(pdf)$/i, "")
-      .replace(/[-_]+/g, " ")
-      .trim(),
-    examType,
-    folder,
-    year: yearMatch?.[0] || "",
-    month: "",
+    title:
+      cleanText(title) ||
+      decodeURIComponent(pdfUrl.split("/").pop() || "Question Paper"),
+
+    pdfUrl,
+    sourceUrl: pdfUrl,
+
+    examType: detectExamType(combined),
+    year: detectYear(combined),
+    semester: detectSemester(combined),
+
+    subject: "",
+    courseCode: "",
+
+    folder: cleanText(context)
   };
 }
 
@@ -85,7 +148,8 @@ async function fetchPage(url) {
   const response = await fetch(url, {
     redirect: "follow",
     headers: {
-      "User-Agent": "SRM-Question-Paper-Finder/1.0"
+      "User-Agent":
+        "Mozilla/5.0 (compatible; SRM-Question-Paper-Finder/1.0)"
     }
   });
 
@@ -93,29 +157,44 @@ async function fetchPage(url) {
     throw new Error(`HTTP ${response.status}`);
   }
 
+  const contentType =
+    response.headers.get("content-type") || "";
+
   return {
     url: response.url,
-    contentType: response.headers.get("content-type") || "",
+    contentType,
     body: await response.text()
   };
 }
 
 async function discoverPapers() {
   const visited = new Set();
+  const queued = new Set([ROOT]);
   const queue = [ROOT];
-  const papers = [];
 
-  while (queue.length > 0 && visited.size < MAX_PAGES) {
+  const papers = new Map();
+
+  while (
+    queue.length > 0 &&
+    visited.size < MAX_PAGES
+  ) {
     const currentUrl = queue.shift();
 
-    if (visited.has(currentUrl)) continue;
+    if (!currentUrl || visited.has(currentUrl)) {
+      continue;
+    }
+
     visited.add(currentUrl);
 
     let page;
 
     try {
       page = await fetchPage(currentUrl);
-    } catch {
+    } catch (error) {
+      console.error(
+        `Could not crawl ${currentUrl}:`,
+        error.message
+      );
       continue;
     }
 
@@ -128,56 +207,133 @@ async function discoverPapers() {
     $("a[href]").each((_index, element) => {
       const href = $(element).attr("href");
 
-      if (!href) return;
-
-      let absoluteUrl;
-
-      try {
-        absoluteUrl = new URL(href, page.url).href;
-      } catch {
+      if (!href) {
         return;
       }
 
-      if (!absoluteUrl.startsWith(ROOT)) return;
+      const linkText = cleanText(
+        $(element).text()
+      );
 
-      const linkText = $(element).text().replace(/\s+/g, " ").trim();
+      const url = absoluteUrl(
+        href,
+        page.url
+      );
 
-      if (isQuestionPaper(absoluteUrl, linkText)) {
-        const paper = extractPaperInfo(
+      if (!url || !sameHost(url)) {
+        return;
+      }
+
+      /*
+       * PDF discovery
+       */
+      if (
+        isPdf(url) &&
+        looksLikeQuestionPaper(url, linkText)
+      ) {
+        const paper = makePaper(
           linkText,
-          absoluteUrl,
+          url,
           page.url
         );
 
-        papers.push(paper);
+        papers.set(paper.pdfUrl, paper);
+
         return;
       }
 
-      if (!visited.has(absoluteUrl)) {
-        queue.push(absoluteUrl);
+      /*
+       * Continue through the SRM Document Manager
+       * hierarchy.
+       */
+      if (!visited.has(url) && !queued.has(url)) {
+        queued.add(url);
+        queue.push(url);
       }
     });
   }
 
-  return [
-    ...new Map(
-      papers.map(paper => [paper.pdfUrl, paper])
-    ).values()
-  ];
+  return Array.from(papers.values());
 }
 
-export async function searchQuestionPapers(query) {
+function matchesFilter(paper, filters) {
+  const {
+    examType,
+    year,
+    semester
+  } = filters;
+
+  if (
+    examType &&
+    examType !== "all" &&
+    paper.examType !== examType
+  ) {
+    return false;
+  }
+
+  if (
+    year &&
+    year !== "all" &&
+    paper.year !== year
+  ) {
+    return false;
+  }
+
+  if (
+    semester &&
+    semester !== "all" &&
+    paper.semester !== semester
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function searchTextMatch(paper, query) {
+  const q = normalize(query);
+
+  if (!q) {
+    return true;
+  }
+
+  const text = normalize(
+    [
+      paper.title,
+      paper.examType,
+      paper.year,
+      paper.semester,
+      paper.folder,
+      paper.pdfUrl
+    ].join(" ")
+  );
+
+  const words = q.split(" ").filter(Boolean);
+
+  return words.every(word =>
+    text.includes(word)
+  );
+}
+
+export async function searchQuestionPapers(
+  query = "",
+  filters = {}
+) {
   const papers = await discoverPapers();
 
   return papers
-    .map(paper => ({
-      ...paper,
-      _score: scorePaper(paper, query)
-    }))
-    .filter(paper => paper._score > 0)
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 30)
-    .map(({ _score, ...paper }) => paper);
+    .filter(paper =>
+      matchesFilter(paper, filters)
+    )
+    .filter(paper =>
+      searchTextMatch(paper, query)
+    )
+    .sort((a, b) => {
+      const yearA = Number(a.year || 0);
+      const yearB = Number(b.year || 0);
+
+      return yearB - yearA;
+    });
 }
 
 export async function refreshIndex() {
