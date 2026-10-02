@@ -1,146 +1,190 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import * as cheerio from "cheerio";
 
 const ROOT = "https://intranet.srmap.edu.in/";
-const DATA_DIR = path.resolve("data");
-const INDEX_FILE = path.join(DATA_DIR, "papers.json");
 
-// IMPORTANT:
-// This prototype only indexes documents/pages that are publicly accessible
-// from the SRM AP intranet. It does not bypass login, CAPTCHA, permissions,
-// robots restrictions, or access controls.
+const MAX_PAGES = Number(process.env.MAX_PAGES || 40);
 
-async function loadIndex() {
-  try {
-    return JSON.parse(await fs.readFile(INDEX_FILE, "utf8"));
-  } catch {
-    return [];
-  }
-}
-
-function tokenize(s) {
-  return String(s).toLowerCase()
+function tokenize(value) {
+  return String(value || "")
+    .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(/\s+/)
     .filter(Boolean);
 }
 
 function scorePaper(paper, query) {
-  const q = tokenize(query);
-  const haystack = tokenize([
-    paper.title, paper.subject, paper.branch, paper.semester,
-    paper.year, paper.examType, paper.text
-  ].join(" "));
+  const queryTokens = tokenize(query);
+
+  const searchableText = tokenize(
+    [
+      paper.title,
+      paper.subject,
+      paper.courseCode,
+      paper.examType,
+      paper.folder,
+      paper.year,
+      paper.month,
+      paper.pdfUrl
+    ].join(" ")
+  );
 
   let score = 0;
-  for (const token of q) {
-    if (haystack.includes(token)) score += 2;
-    else if (haystack.some(x => x.includes(token))) score += 1;
+
+  for (const token of queryTokens) {
+    if (searchableText.includes(token)) {
+      score += 3;
+    } else if (searchableText.some(value => value.includes(token))) {
+      score += 1;
+    }
   }
 
-  // Question-paper intent gets a small boost.
-  if (/(question|paper|qp|mid|midterm|end.?sem|exam)/i.test(query)) score += 1;
   return score;
 }
 
-export async function searchQuestionPapers(query) {
-  const index = await loadIndex();
-  return index
-    .map(p => ({ ...p, _score: scorePaper(p, query) }))
-    .filter(p => p._score > 0)
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 20)
-    .map(({ _score, text, ...p }) => p);
+function isQuestionPaper(url, text = "") {
+  return /\.pdf(\?|$)/i.test(url) &&
+    /(question|paper|exam|mid|term|end|test)/i.test(
+      `${url} ${text}`
+    );
 }
 
-/*
- * Simple public-document crawler.
- * Start from the SRM intranet root and follow same-host HTML links.
- * For a production deployment, replace this with a controlled sitemap/
- * document-index job and respect SRM's published access rules.
- */
-export async function refreshIndex() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+function extractPaperInfo(title, url, folder = "") {
+  const combined = `${title} ${url}`;
 
+  const courseMatch = combined.match(
+    /\b([A-Z]{2,5}\s?[A-Z]?\s?\d{2,4})\b/i
+  );
+
+  let examType = "";
+
+  if (/mid\s*term/i.test(combined)) {
+    examType = "Mid Term";
+  } else if (/end\s*term/i.test(combined)) {
+    examType = "End Term";
+  }
+
+  const yearMatch = combined.match(/\b20\d{2}\b/);
+
+  return {
+    title: title || "SRM AP Question Paper",
+    pdfUrl: url,
+    sourceUrl: url,
+    courseCode: courseMatch?.[1] || "",
+    subject: title
+      .replace(/\.(pdf)$/i, "")
+      .replace(/[-_]+/g, " ")
+      .trim(),
+    examType,
+    folder,
+    year: yearMatch?.[0] || "",
+    month: "",
+  };
+}
+
+async function fetchPage(url) {
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "User-Agent": "SRM-Question-Paper-Finder/1.0"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return {
+    url: response.url,
+    contentType: response.headers.get("content-type") || "",
+    body: await response.text()
+  };
+}
+
+async function discoverPapers() {
   const visited = new Set();
   const queue = [ROOT];
   const papers = [];
-  const MAX_PAGES = Number(process.env.MAX_PAGES || 40);
 
-  while (queue.length && visited.size < MAX_PAGES) {
-    const url = queue.shift();
-    if (visited.has(url)) continue;
-    visited.add(url);
+  while (queue.length > 0 && visited.size < MAX_PAGES) {
+    const currentUrl = queue.shift();
 
-    let response;
+    if (visited.has(currentUrl)) continue;
+    visited.add(currentUrl);
+
+    let page;
+
     try {
-      response = await fetch(url, { redirect: "follow" });
-      if (!response.ok) continue;
+      page = await fetchPage(currentUrl);
     } catch {
       continue;
     }
 
-    const contentType = response.headers.get("content-type") || "";
-
-    if (contentType.includes("application/pdf")) {
-      papers.push({
-        title: decodeURIComponent(url.split("/").pop() || "SRM AP PDF"),
-        pdfUrl: url,
-        sourceUrl: url,
-        subject: "",
-        branch: "",
-        semester: "",
-        year: "",
-        examType: "",
-        text: url
-      });
+    if (!page.contentType.includes("text/html")) {
       continue;
     }
 
-    if (!contentType.includes("text/html")) continue;
+    const $ = cheerio.load(page.body);
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
+    $("a[href]").each((_index, element) => {
+      const href = $(element).attr("href");
 
-    $("a[href]").each((_i, el) => {
-      const href = $(el).attr("href");
       if (!href) return;
 
-      let absolute;
-      try { absolute = new URL(href, url).href; } catch { return; }
-      if (!absolute.startsWith(ROOT)) return;
+      let absoluteUrl;
 
-      const lower = absolute.toLowerCase();
-      const label = $(el).text().trim();
+      try {
+        absoluteUrl = new URL(href, page.url).href;
+      } catch {
+        return;
+      }
 
-      if (lower.endsWith(".pdf")) {
-        if (/(question|paper|mid|exam|test)/i.test(`${absolute} ${label}`)) {
-          papers.push({
-            title: label || decodeURIComponent(absolute.split("/").pop() || "Question Paper"),
-            pdfUrl: absolute,
-            sourceUrl: url,
-            subject: "",
-            branch: "",
-            semester: "",
-            year: "",
-            examType: "",
-            text: `${label} ${absolute}`
-          });
-        }
-      } else if (!visited.has(absolute)) {
-        queue.push(absolute);
+      if (!absoluteUrl.startsWith(ROOT)) return;
+
+      const linkText = $(element).text().replace(/\s+/g, " ").trim();
+
+      if (isQuestionPaper(absoluteUrl, linkText)) {
+        const paper = extractPaperInfo(
+          linkText,
+          absoluteUrl,
+          page.url
+        );
+
+        papers.push(paper);
+        return;
+      }
+
+      if (!visited.has(absoluteUrl)) {
+        queue.push(absoluteUrl);
       }
     });
   }
 
-  // De-duplicate by PDF URL.
-  const unique = [...new Map(papers.map(p => [p.pdfUrl, p])).values()];
-  await fs.writeFile(INDEX_FILE, JSON.stringify(unique, null, 2));
+  return [
+    ...new Map(
+      papers.map(paper => [paper.pdfUrl, paper])
+    ).values()
+  ];
+}
+
+export async function searchQuestionPapers(query) {
+  const papers = await discoverPapers();
+
+  return papers
+    .map(paper => ({
+      ...paper,
+      _score: scorePaper(paper, query)
+    }))
+    .filter(paper => paper._score > 0)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 30)
+    .map(({ _score, ...paper }) => paper);
+}
+
+export async function refreshIndex() {
+  const papers = await discoverPapers();
 
   return {
-    indexed: unique.length,
-    pagesVisited: visited.size,
-    note: "Only publicly accessible, same-host documents discovered by the crawler are indexed."
+    indexed: papers.length,
+    papers
   };
 }
