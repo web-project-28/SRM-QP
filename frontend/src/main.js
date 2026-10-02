@@ -1,111 +1,161 @@
-import "./style.css";
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
 
-const API = "http://localhost:4000";
+const app = document.querySelector("#app");
 
-document.querySelector("#app").innerHTML = `
-  <main class="shell">
-    <section class="hero">
-      <div class="badge">SRM AP • QUESTION PAPERS</div>
-      <h1>Find your question paper.</h1>
-      <p>Ask normally. Get matching SRM AP question-paper PDFs.</p>
-    </section>
-
-    <section class="chat" id="chat">
-      <div class="message bot">
-        <div class="avatar">Q</div>
+app.innerHTML = `
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">SRM</div>
         <div>
-          <strong>Paper Finder</strong>
-          <p>What question paper are you looking for?</p>
-          <div class="chips">
-            <button data-q="previous year question papers">Previous year papers</button>
-            <button data-q="mid 1 question papers">Mid 1 papers</button>
-            <button data-q="mid 2 question papers">Mid 2 papers</button>
-          </div>
+          <h1>SRM AP Question Papers</h1>
+          <p>Find previous question papers quickly</p>
         </div>
       </div>
-    </section>
+    </header>
 
-    <form class="composer" id="form">
-      <input id="query" autocomplete="off"
-        placeholder="e.g. previous year Data Structures mid 1 paper" />
-      <button type="submit">Search</button>
-    </form>
+    <main class="chat-container">
+      <section class="welcome">
+        <h2>What question paper are you looking for?</h2>
+        <p>
+          Search by subject, course code, exam type, month, or year.
+        </p>
+      </section>
 
-    <footer>Documents are returned from the SRM AP intranet source.</footer>
-  </main>
+      <div class="quick-searches">
+        <button data-query="previous year question papers">Previous Year</button>
+        <button data-query="mid term question papers">Mid Term</button>
+        <button data-query="end term question papers">End Term</button>
+        <button data-query="show me all available question papers">All Papers</button>
+      </div>
+
+      <form id="search-form" class="search-box">
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Search question papers..."
+          autocomplete="off"
+        />
+        <button type="submit">Search</button>
+      </form>
+
+      <div id="status"></div>
+
+      <section id="results" class="results"></section>
+    </main>
+  </div>
 `;
 
-const chat = document.querySelector("#chat");
-const form = document.querySelector("#form");
-const input = document.querySelector("#query");
+const searchForm = document.querySelector("#search-form");
+const searchInput = document.querySelector("#search-input");
+const results = document.querySelector("#results");
+const status = document.querySelector("#status");
 
-function addMessage(html, cls = "bot") {
-  const div = document.createElement("div");
-  div.className = `message ${cls}`;
-  div.innerHTML = html;
-  chat.appendChild(div);
-  div.scrollIntoView({ behavior: "smooth", block: "end" });
-}
+async function searchQuestionPapers(query) {
+  const cleanQuery = query.trim();
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, c => ({
-    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;"
-  }[c]));
-}
-
-function renderResults(data) {
-  if (!data.results.length) {
-    addMessage(`<strong>No matching papers found.</strong>
-      <p>Try the subject, exam type, semester, or year in a simpler phrase.</p>`);
+  if (!cleanQuery) {
+    status.textContent = "Enter a question paper name or subject.";
+    results.innerHTML = "";
     return;
   }
 
-  const cards = data.results.map(p => `
-    <article class="paper">
-      <div class="paper-icon">PDF</div>
-      <div class="paper-info">
-        <h3>${escapeHtml(p.title)}</h3>
-        <div class="meta">
-          ${[p.subject, p.branch, p.semester, p.year, p.examType]
-            .filter(Boolean).map(escapeHtml).join(" • ") || "SRM AP examination document"}
-        </div>
-        <div class="actions">
-          <a href="${escapeHtml(p.pdfUrl)}" target="_blank" rel="noopener">View PDF</a>
-          <a class="download" href="${escapeHtml(p.pdfUrl)}" download>Download PDF</a>
-        </div>
-      </div>
-    </article>
-  `).join("");
-
-  addMessage(`<strong>Found ${data.count} matching paper${data.count === 1 ? "" : "s"}.</strong>
-    <div class="results">${cards}</div>`);
-}
-
-async function search(q) {
-  addMessage(`<p>${escapeHtml(q)}</p>`, "user");
-  addMessage(`<div class="typing"><span></span><span></span><span></span></div>`);
+  status.textContent = "Searching SRM AP question papers...";
+  results.innerHTML = "";
 
   try {
-    const response = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`);
-    const data = await response.json();
-    chat.lastElementChild.remove();
+    const response = await fetch(
+      `${API_BASE}/api/search?q=${encodeURIComponent(cleanQuery)}`
+    );
 
-    if (!response.ok) throw new Error(data.error || "Search failed");
-    renderResults(data);
-  } catch (err) {
-    chat.lastElementChild?.remove();
-    addMessage(`<strong>Search unavailable.</strong><p>Make sure the backend is running.</p>`);
+    if (!response.ok) {
+      throw new Error(`Search failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    renderResults(data.results || []);
+
+    if ((data.results || []).length === 0) {
+      status.textContent = "No matching question papers found.";
+    } else {
+      status.textContent =
+        `${data.results.length} question paper${data.results.length === 1 ? "" : "s"} found`;
+    }
+  } catch (error) {
+    console.error(error);
+
+    status.textContent =
+      "Unable to connect to the question-paper server.";
   }
 }
 
-form.addEventListener("submit", e => {
-  e.preventDefault();
-  const q = input.value.trim();
-  if (!q) return;
-  input.value = "";
-  search(q);
+function renderResults(papers) {
+  results.innerHTML = "";
+
+  for (const paper of papers) {
+    const card = document.createElement("article");
+    card.className = "paper-card";
+
+    const title = document.createElement("h3");
+    title.textContent =
+      paper.title || paper.subject || "SRM AP Question Paper";
+
+    const details = document.createElement("div");
+    details.className = "paper-details";
+
+    const information = [
+      paper.courseCode,
+      paper.examType,
+      paper.month,
+      paper.year
+    ].filter(Boolean);
+
+    details.textContent =
+      information.length > 0
+        ? information.join(" • ")
+        : "Question Paper";
+
+    const actions = document.createElement("div");
+    actions.className = "paper-actions";
+
+    const viewButton = document.createElement("a");
+    viewButton.href = paper.pdfUrl;
+    viewButton.target = "_blank";
+    viewButton.rel = "noopener noreferrer";
+    viewButton.className = "view-button";
+    viewButton.textContent = "View PDF";
+
+    const downloadButton = document.createElement("a");
+    downloadButton.href = paper.pdfUrl;
+    downloadButton.target = "_blank";
+    downloadButton.rel = "noopener noreferrer";
+    downloadButton.className = "download-button";
+    downloadButton.textContent = "Download PDF";
+    downloadButton.setAttribute("download", "");
+
+    actions.appendChild(viewButton);
+    actions.appendChild(downloadButton);
+
+    card.appendChild(title);
+    card.appendChild(details);
+    card.appendChild(actions);
+
+    results.appendChild(card);
+  }
+}
+
+searchForm.addEventListener("submit", event => {
+  event.preventDefault();
+  searchQuestionPapers(searchInput.value);
 });
 
-document.addEventListener("click", e => {
-  if (e.target.matches("[data-q]")) search(e.target.dataset.q);
+document.querySelectorAll("[data-query]").forEach(button => {
+  button.addEventListener("click", () => {
+    const query = button.dataset.query;
+
+    searchInput.value = query;
+    searchQuestionPapers(query);
+  });
 });
