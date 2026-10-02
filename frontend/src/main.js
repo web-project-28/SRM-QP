@@ -1,5 +1,4 @@
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+const API_BASE = "https://srm-qp-backend.vercel.app";
 
 const app = document.querySelector("#app");
 
@@ -24,10 +23,21 @@ app.innerHTML = `
       </section>
 
       <div class="quick-searches">
-        <button data-query="previous year question papers">Previous Year</button>
-        <button data-query="mid term question papers">Mid Term</button>
-        <button data-query="end term question papers">End Term</button>
-        <button data-query="show me all available question papers">All Papers</button>
+        <button data-query="previous year question papers">
+          Previous Year
+        </button>
+
+        <button data-query="mid term question papers">
+          Mid Term
+        </button>
+
+        <button data-query="end term question papers">
+          End Term
+        </button>
+
+        <button data-query="show me all available question papers">
+          All Papers
+        </button>
       </div>
 
       <form id="search-form" class="search-box">
@@ -37,7 +47,10 @@ app.innerHTML = `
           placeholder="Search question papers..."
           autocomplete="off"
         />
-        <button type="submit">Search</button>
+
+        <button type="submit">
+          Search
+        </button>
       </form>
 
       <div id="status"></div>
@@ -56,21 +69,28 @@ async function searchQuestionPapers(query) {
   const cleanQuery = query.trim();
 
   if (!cleanQuery) {
-    status.textContent = "Enter a question paper name or subject.";
+    status.textContent =
+      "Enter a question paper name or subject.";
+
     results.innerHTML = "";
     return;
   }
 
-  status.textContent = "Searching SRM AP question papers...";
+  status.textContent =
+    "Searching SRM AP question papers...";
+
   results.innerHTML = "";
 
   try {
-    const response = await fetch(
-      `${API_BASE}/api/search?q=${encodeURIComponent(cleanQuery)}`
-    );
+    const url =
+      `${API_BASE}/api/search?q=${encodeURIComponent(cleanQuery)}`;
+
+    const response = await fetch(url);
 
     if (!response.ok) {
-      throw new Error(`Search failed: ${response.status}`);
+      throw new Error(
+        `Server returned ${response.status}`
+      );
     }
 
     const data = await response.json();
@@ -78,16 +98,29 @@ async function searchQuestionPapers(query) {
     renderResults(data.results || []);
 
     if ((data.results || []).length === 0) {
-      status.textContent = "No matching question papers found.";
+      status.textContent =
+        "No matching question papers found.";
     } else {
       status.textContent =
-        `${data.results.length} question paper${data.results.length === 1 ? "" : "s"} found`;
+        `${data.results.length} question paper${
+          data.results.length === 1 ? "" : "s"
+        } found`;
     }
+
   } catch (error) {
-    console.error(error);
+    console.error("Question paper search error:", error);
 
     status.textContent =
       "Unable to connect to the question-paper server.";
+
+    results.innerHTML = `
+      <div class="error-card">
+        <h3>Search connection failed</h3>
+        <p>
+          The website could not connect to the SRM question-paper server.
+        </p>
+      </div>
+    `;
   }
 }
 
@@ -96,13 +129,18 @@ function renderResults(papers) {
 
   for (const paper of papers) {
     const card = document.createElement("article");
+
     card.className = "paper-card";
 
     const title = document.createElement("h3");
+
     title.textContent =
-      paper.title || paper.subject || "SRM AP Question Paper";
+      paper.title ||
+      paper.subject ||
+      "SRM AP Question Paper";
 
     const details = document.createElement("div");
+
     details.className = "paper-details";
 
     const information = [
@@ -118,9 +156,11 @@ function renderResults(papers) {
         : "Question Paper";
 
     const actions = document.createElement("div");
+
     actions.className = "paper-actions";
 
     const viewButton = document.createElement("a");
+
     viewButton.href = paper.pdfUrl;
     viewButton.target = "_blank";
     viewButton.rel = "noopener noreferrer";
@@ -128,11 +168,13 @@ function renderResults(papers) {
     viewButton.textContent = "View PDF";
 
     const downloadButton = document.createElement("a");
+
     downloadButton.href = paper.pdfUrl;
     downloadButton.target = "_blank";
     downloadButton.rel = "noopener noreferrer";
     downloadButton.className = "download-button";
     downloadButton.textContent = "Download PDF";
+
     downloadButton.setAttribute("download", "");
 
     actions.appendChild(viewButton);
@@ -148,6 +190,7 @@ function renderResults(papers) {
 
 searchForm.addEventListener("submit", event => {
   event.preventDefault();
+
   searchQuestionPapers(searchInput.value);
 });
 
@@ -156,6 +199,7 @@ document.querySelectorAll("[data-query]").forEach(button => {
     const query = button.dataset.query;
 
     searchInput.value = query;
+
     searchQuestionPapers(query);
   });
 });
