@@ -3,45 +3,82 @@ import cors from "cors";
 import { searchQuestionPapers, refreshIndex } from "./search.js";
 
 const app = express();
-const PORT = process.env.PORT || 4000;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 
-app.use(cors({ origin: FRONTEND_ORIGIN }));
+const PORT = process.env.PORT || 4000;
+
+const FRONTEND_ORIGIN =
+  process.env.FRONTEND_ORIGIN || "https://web-project-28.github.io";
+
+app.use(
+  cors({
+    origin: FRONTEND_ORIGIN,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"]
+  })
+);
+
 app.use(express.json());
 
+/* Health check */
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "SRM AP Question Paper Finder" });
+  res.json({
+    ok: true,
+    service: "SRM AP Question Paper Finder"
+  });
 });
 
+/* Search question papers */
 app.get("/api/search", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
-    if (!q) return res.status(400).json({ error: "Missing q" });
+
+    if (!q) {
+      return res.status(400).json({
+        error: "Missing q"
+      });
+    }
 
     const results = await searchQuestionPapers(q);
-    res.json({
+
+    return res.json({
       query: q,
       count: results.length,
       results
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Search failed" });
+  } catch (error) {
+    console.error("Search error:", error);
+
+    return res.status(500).json({
+      error: "Search failed"
+    });
   }
 });
 
-// Manual refresh endpoint for the prototype.
-// Keep this disabled in production or protect it with authentication.
+/* Manual refresh */
 app.post("/api/admin/refresh", async (_req, res) => {
   try {
     const result = await refreshIndex();
-    res.json(result);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Refresh failed" });
+
+    return res.json(result);
+  } catch (error) {
+    console.error("Refresh error:", error);
+
+    return res.status(500).json({
+      error: "Refresh failed"
+    });
   }
 });
 
+/* Root endpoint */
+app.get("/", (_req, res) => {
+  res.json({
+    service: "SRM AP Question Paper Finder Backend",
+    status: "running"
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`Backend running at http://localhost:${PORT}`);
+  console.log(
+    `SRM AP Question Paper Finder backend running on port ${PORT}`
+  );
 });
